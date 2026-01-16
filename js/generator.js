@@ -289,4 +289,4 @@ export function generateProgram(cfg) {
 
   const sessions = labels.map((l, i) => buildSession(cfg, l, i));
   return { meta, sessions };
-                                }
+}
