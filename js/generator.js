@@ -301,4 +301,4 @@ export function generateProgram(cfg) {
   const sessions = recipes.map((r, i) => buildSession(cfg, r, i));
 
   return { meta, sessions };
-                                    }
+                      }
