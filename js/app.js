@@ -32,19 +32,25 @@ function nextSessionLabel(program, log) {
 }
 
 function renderPills(program, log) {
+  const pillPlan = $("pillPlan");
+  const pillNext = $("pillNext");
+  if (!pillPlan || !pillNext) return;
+
   if (!program) {
-    $("pillPlan").textContent = "Plan: Not set";
-    $("pillNext").textContent = "Next: —";
+    pillPlan.textContent = "Plan: Not set";
+    pillNext.textContent = "Next: —";
     return;
   }
   const s = program.meta?.style ?? "custom";
   const g = program.meta?.goal ?? "—";
-  $("pillPlan").textContent = `Plan: ${s} / ${g}`;
-  $("pillNext").textContent = `Next: ${nextSessionLabel(program, log)}`;
+  pillPlan.textContent = `Plan: ${s} / ${g}`;
+  pillNext.textContent = `Next: ${nextSessionLabel(program, log)}`;
 }
 
 function renderPlan(program) {
   const el = $("tab_plan");
+  if (!el) return;
+
   if (!program) {
     el.innerHTML = `
       <div class="card">
@@ -79,6 +85,7 @@ function renderPlan(program) {
 
   const sessionSelect = $("planSession");
   const list = $("planList");
+  if (!sessionSelect || !list) return;
 
   const renderList = () => {
     const sid = sessionSelect.value;
@@ -98,6 +105,8 @@ function renderPlan(program) {
 
 function renderSettings(log) {
   const panel = $("settingsPanel");
+  if (!panel) return;
+
   panel.innerHTML = `
     <div class="row between">
       <strong>Settings</strong>
@@ -113,20 +122,25 @@ function renderSettings(log) {
     </div>
   `;
 
-  $("btnCloseSettings").addEventListener("click", () => panel.classList.add("hidden"));
+  const btnClose = $("btnCloseSettings");
+  const btnExport = $("btnExportLog");
+  const btnClearLog = $("btnClearLog");
+  const btnClearPlan = $("btnClearPlan");
 
-  $("btnExportLog").addEventListener("click", () => {
+  btnClose?.addEventListener("click", () => panel.classList.add("hidden"));
+
+  btnExport?.addEventListener("click", () => {
     const csv = exportLogCSV(log);
     downloadText(csv, "accountability-log.csv", "text/csv;charset=utf-8");
   });
 
-  $("btnClearLog").addEventListener("click", () => {
+  btnClearLog?.addEventListener("click", () => {
     if (!confirm("Clear the entire log?")) return;
     store.save(KEY_LOG, []);
     location.reload();
   });
 
-  $("btnClearPlan").addEventListener("click", () => {
+  btnClearPlan?.addEventListener("click", () => {
     if (!confirm("Clear plan + keep log?")) return;
     localStorage.removeItem(KEY_PROG);
     location.reload();
@@ -138,7 +152,7 @@ function exportLogCSV(log) {
   const safe = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
 
   const lines = [...log]
-    .sort((a, b) => (a.ts || 0) - (b.ts || 0))
+    .sort((a, b) => (a.ts || 0) - (a.ts || 0))
     .map((e) => [
       e.date,
       e.sessionLabel,
@@ -165,7 +179,12 @@ function downloadText(text, filename, mime) {
 }
 
 function renderHistory(log) {
-  const q = $("histSearch").value.trim().toLowerCase();
+  const qEl = $("histSearch");
+  const body = $("histBody");
+  const count = $("histCount");
+  if (!qEl || !body || !count) return;
+
+  const q = qEl.value.trim().toLowerCase();
   const filtered = [...log]
     .sort((a, b) => (b.ts || 0) - (a.ts || 0))
     .filter((e) => {
@@ -174,9 +193,9 @@ function renderHistory(log) {
       return blob.includes(q);
     });
 
-  $("histCount").textContent = `${filtered.length} entries`;
+  count.textContent = `${filtered.length} entries`;
 
-  $("histBody").innerHTML = filtered.length
+  body.innerHTML = filtered.length
     ? filtered.map((e) => `
       <tr>
         <td>${escapeHtml(e.date)}</td>
@@ -196,14 +215,16 @@ function wireTabs() {
       btn.classList.add("active");
       const tab = btn.getAttribute("data-tab");
       ["builder","plan","log","fuel"].forEach((t) => {
-        $("tab_" + t).classList.toggle("hidden", t !== tab);
+        $("tab_" + t)?.classList.toggle("hidden", t !== tab);
       });
     });
   });
 }
 
 function renderFuelStub() {
-  $("tab_fuel").innerHTML = `
+  const el = $("tab_fuel");
+  if (!el) return;
+  el.innerHTML = `
     <div class="card">
       <strong>Fuel</strong>
       <div class="small muted" style="margin-top:6px;">
@@ -219,55 +240,60 @@ function init() {
   let program = store.load(KEY_PROG, null);
   const log = store.load(KEY_LOG, []);
 
-  // Builder
-  Builder.render("tab_builder", (newProgram) => {
-    program = newProgram;
-    renderPlan(program);
-
-    const curLog = store.load(KEY_LOG, []);
-    renderPills(program, curLog);
-
-    // jump to Plan after generating
-    document.querySelector('.tabbtn[data-tab="plan"]').click();
-  });
-
-  // Logger (mounted into tab_log)
   Logger.render("tab_log", () => program, () => {
     const curLog = store.load(KEY_LOG, []);
     renderHistory(curLog);
     renderPills(store.load(KEY_PROG, null), curLog);
   });
 
-  // Plan + pills + settings + history
+  Builder.render("tab_builder", (newProgram) => {
+    program = newProgram;
+    renderPlan(program);
+
+    // if your logger has refresh, it won't hurt. If it doesn't, no crash.
+    try { Logger.refresh?.(); } catch {}
+
+    const curLog = store.load(KEY_LOG, []);
+    renderPills(program, curLog);
+
+    document.querySelector('.tabbtn[data-tab="plan"]')?.click();
+  });
+
   renderPlan(program);
   renderPills(program, log);
   renderSettings(log);
   renderHistory(log);
   renderFuelStub();
 
-  // Settings toggle
-  $("btnSettings").addEventListener("click", () => $("settingsPanel").classList.toggle("hidden"));
+  // SETTINGS: delegation makes it resilient even if the header gets rerendered
+  document.addEventListener("click", (e) => {
+    const t = e.target;
+    if (!(t instanceof Element)) return;
 
-  // Search
-  $("histSearch").addEventListener("input", () => renderHistory(store.load(KEY_LOG, [])));
+    if (t.id === "btnSettings") {
+      const panel = $("settingsPanel");
+      if (!panel) return;
+      panel.classList.toggle("hidden");
+    }
 
-  // Today (history panel)
-  $("btnHistToday").addEventListener("click", () => {
-    alert(`Today is ${todayISO()}. Use the Log tab to save entries.`);
+    if (t.id === "btnHistToday") {
+      alert(`Today is ${todayISO()}. Use the Log tab to save entries.`);
+    }
+
+    if (t.id === "btnDeleteLast") {
+      const cur = store.load(KEY_LOG, []);
+      if (!cur.length) return;
+      if (!confirm("Delete last entry?")) return;
+      const idx = cur.map((e, i) => ({ e, i }))
+        .sort((a, b) => (b.e.ts || 0) - (a.e.ts || 0))[0].i;
+      cur.splice(idx, 1);
+      store.save(KEY_LOG, cur);
+      renderHistory(cur);
+      renderPills(store.load(KEY_PROG, null), cur);
+    }
   });
 
-  // Delete last
-  $("btnDeleteLast").addEventListener("click", () => {
-    const cur = store.load(KEY_LOG, []);
-    if (!cur.length) return;
-    if (!confirm("Delete last entry?")) return;
-    const idx = cur.map((e, i) => ({ e, i }))
-      .sort((a, b) => (b.e.ts || 0) - (a.e.ts || 0))[0].i;
-    cur.splice(idx, 1);
-    store.save(KEY_LOG, cur);
-    renderHistory(cur);
-    renderPills(store.load(KEY_PROG, null), cur);
-  });
+  $("histSearch")?.addEventListener("input", () => renderHistory(store.load(KEY_LOG, [])));
 }
 
 init();
