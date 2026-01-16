@@ -1,5 +1,6 @@
 // js/app.js
 import { store, todayISO, escapeHtml } from "./storage.js";
+import { Builder } from "./builder.js";
 
 const KEY_LOG = "ATL_LOG_V1";
 const KEY_PROG = "ATL_PROGRAM_V1";
@@ -41,7 +42,58 @@ function renderPills(program, log) {
   $("pillNext").textContent = `Next: ${nextSessionLabel(program, log)}`;
 }
 
-function renderSettings(program, log) {
+function renderPlan(program) {
+  const el = $("tab_plan");
+  if (!program) {
+    el.innerHTML = `
+      <div class="card">
+        <strong>Plan</strong>
+        <div class="small muted" style="margin-top:6px;">Generate a plan in Builder.</div>
+      </div>
+    `;
+    return;
+  }
+
+  const opts = program.sessions.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.label)}</option>`).join("");
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="row between">
+        <strong>Plan</strong>
+        <span class="badge">${escapeHtml(program.meta.style)} · ${escapeHtml(program.meta.goal)} · ${program.meta.freq}d/w</span>
+      </div>
+
+      <div class="row" style="margin-top:10px;">
+        <div style="flex:1 1 220px;">
+          <label>Preview session</label>
+          <select id="planSession">${opts}</select>
+        </div>
+      </div>
+
+      <div style="height:1px;background:#222638;margin:10px 0;"></div>
+
+      <ul id="planList" class="small" style="margin:0;padding-left:18px;"></ul>
+    </div>
+  `;
+
+  const sessionSelect = $("planSession");
+  const list = $("planList");
+
+  const renderList = () => {
+    const sid = sessionSelect.value;
+    const s = program.sessions.find(x => x.id === sid);
+    if (!s) { list.innerHTML = ""; return; }
+    list.innerHTML = s.items.map(it => {
+      const r = it.rule ? `${it.rule.repMin}-${it.rule.repMax} reps (+${it.rule.inc})` : (it.logType === "timed" ? "timed" : it.logType);
+      return `<li><b>${escapeHtml(it.name)}</b> <span class="muted">(${escapeHtml(it.logType)} · ${escapeHtml(r)})</span></li>`;
+    }).join("");
+  };
+
+  sessionSelect.addEventListener("change", renderList);
+  renderList();
+}
+
+function renderSettings(log) {
   const panel = $("settingsPanel");
   panel.innerHTML = `
     <div class="row between">
@@ -148,28 +200,14 @@ function wireTabs() {
 }
 
 function stubPanels() {
-  // Temporary placeholders so the app is usable while we add modules.
-  $("tab_builder").innerHTML = `
-    <div class="card">
-      <strong>Builder</strong>
-      <div class="small muted" style="margin-top:6px;">
-        Next file will add the Builder UI + generator.
-      </div>
-    </div>
-  `;
-  $("tab_plan").innerHTML = `
-    <div class="card">
-      <strong>Plan</strong>
-      <div class="small muted" style="margin-top:6px;">
-        Plan preview will appear after generation.
-      </div>
-    </div>
-  `;
   $("tab_log").innerHTML = `
     <div class="card">
       <strong>Log</strong>
       <div class="small muted" style="margin-top:6px;">
         Logger UI lands next (auto-fill + auto-progression).
+      </div>
+      <div class="small muted" style="margin-top:6px;">
+        Today is ${todayISO()}.
       </div>
     </div>
   `;
@@ -187,19 +225,27 @@ function init() {
   wireTabs();
   stubPanels();
 
-  const program = store.load(KEY_PROG, null);
+  let program = store.load(KEY_PROG, null);
   const log = store.load(KEY_LOG, []);
 
+  // Builder mounts here and can refresh plan/pills
+  Builder.render("tab_builder", (newProgram) => {
+    program = newProgram;
+    renderPlan(program);
+    renderPills(program, store.load(KEY_LOG, []));
+    // jump user to Plan tab after generation (optional)
+    document.querySelector('.tabbtn[data-tab="plan"]').click();
+  });
+
+  renderPlan(program);
   renderPills(program, log);
-  renderSettings(program, log);
+  renderSettings(log);
   renderHistory(log);
 
   $("btnSettings").addEventListener("click", () => $("settingsPanel").classList.toggle("hidden"));
-
   $("histSearch").addEventListener("input", () => renderHistory(store.load(KEY_LOG, [])));
 
   $("btnHistToday").addEventListener("click", () => {
-    // we’ll use this later once the log form exists
     alert(`Today is ${todayISO()}. (Log form comes next.)`);
   });
 
