@@ -1,15 +1,13 @@
 // js/generator.js
-// Deterministic plan generator v0.3
-// Fixes: same exercises each session + duplicates within a session
+// Structured plan generator v1.0
+// Fixes: repeating sessions + unwanted overlap between Session 1 & 2
+// Philosophy: sessions are built from pattern "recipes" (push/pull/legs/etc),
+// then exercises are picked deterministically within those patterns.
 
-const uid = (() => {
-  let n = 0;
-  return () => String(++n);
-})();
+const uid = (() => { let n = 0; return () => String(++n); })();
 
 function eqTags(cfg) {
-  const t = new Set();
-  t.add("bw");
+  const t = new Set(["bw"]);
   if (cfg.eq_barbell) { t.add("barbell"); t.add("rack"); }
   if (cfg.eq_dumbbell) t.add("dumbbell");
   if (cfg.eq_cables) t.add("cables");
@@ -29,7 +27,6 @@ function movementBlocked(cfg, pattern) {
   return false;
 }
 
-// Tiny stable hash -> integer (FNV-ish)
 function hashInt(str) {
   let h = 2166136261;
   for (let i = 0; i < str.length; i++) {
@@ -37,46 +34,6 @@ function hashInt(str) {
     h = Math.imul(h, 16777619);
   }
   return (h >>> 0);
-}
-
-// Seeded pick from pool, excluding already-picked names
-function pickSeeded(cfg, pool, seed, usedNames, { preferPattern } = {}) {
-  const tags = eqTags(cfg);
-
-  const list = pool.filter(x => {
-    if (preferPattern && x.pattern !== preferPattern) return false;
-    if (movementBlocked(cfg, x.pattern)) return false;
-
-    // equipment match
-    if (!x.tags.some(tt => tags.has(tt))) return false;
-
-    // avoid duplicates within session
-    if (usedNames.has(x.name)) return false;
-
-    // spine sensitivity extra safety
-    if (cfg.inj_spine === "high") {
-      const n = x.name.toLowerCase();
-      if (n.includes("deadlift") || n === "back squat" || n === "squat") return false;
-    }
-
-    // tolerance constraints
-    if (x.name.toLowerCase().includes("pull-up") && cfg.mv_pullups !== "good") return false;
-    if (x.name.toLowerCase() === "dips" && cfg.mv_dips !== "good") return false;
-
-    return true;
-  });
-
-  if (!list.length) return null;
-
-  // Choose index based on seed, but also “walk” if collision/edge case
-  const base = hashInt(seed);
-  for (let k = 0; k < list.length; k++) {
-    const idx = (base + k) % list.length;
-    const choice = list[idx];
-    if (!usedNames.has(choice.name)) return choice;
-  }
-
-  return list[0];
 }
 
 function ruleFor(cfg, pattern) {
@@ -88,27 +45,26 @@ function ruleFor(cfg, pattern) {
 
   if (mobility) return null;
 
-  // hypertrophy default
   let repMin = 8, repMax = 12;
   let inc = (units === "kg" ? 1.25 : 2.5);
 
   if (strength) { repMin = 3; repMax = 6; inc = (units === "kg" ? 2.5 : 5); }
   if (endurance) { repMin = 12; repMax = 20; inc = (units === "kg" ? 1.25 : 2.5); }
 
-  // HIT: bias lower on compounds
+  // HIT bias
   if (cfg.style === "hit") {
     if (pattern === "squat" || pattern === "hinge") { repMin = 5; repMax = 8; }
     if (pattern === "push" || pattern === "pull") { repMin = 6; repMax = 10; }
   }
 
-  // spine sensitivity: smaller jumps + safer range on lower body
+  // High spine sensitivity: safer ranges + smaller jumps on legs/hinge
   if (cfg.inj_spine === "high" && (pattern === "squat" || pattern === "hinge")) {
     repMin = Math.max(repMin, 6);
     repMax = Math.max(repMax, 10);
     inc = (units === "kg" ? 1.25 : 2.5);
   }
 
-  // quiet gender bias (defaults only)
+  // Female defaults (overrideable via logging)
   if (female) {
     repMin += 1;
     repMax += 2;
@@ -118,6 +74,7 @@ function ruleFor(cfg, pattern) {
   return { repMin, repMax, inc, trigger: "clean_at_top" };
 }
 
+// --- Exercise pools ---
 const POOLS = {
   push: [
     { name:"Incline press", pattern:"push", logType:"loadreps", tags:["bench","barbell","dumbbell"] },
@@ -142,38 +99,73 @@ const POOLS = {
     { name:"Cable pull-through", pattern:"hinge", logType:"loadreps", tags:["cables"] },
     { name:"RDL (light/controlled)", pattern:"hinge", logType:"loadreps", tags:["barbell","dumbbell"] },
   ],
-  accessories: [
+  accessory: [
     { name:"Lateral raise", pattern:"accessory", logType:"loadreps", tags:["dumbbell","cables"] },
     { name:"Curl", pattern:"accessory", logType:"loadreps", tags:["dumbbell","cables","barbell"] },
     { name:"Triceps pressdown", pattern:"accessory", logType:"loadreps", tags:["cables"] },
     { name:"Calf raise", pattern:"accessory", logType:"loadreps", tags:["bw","barbell","dumbbell"] },
     { name:"Dips", pattern:"dips", logType:"loadreps", tags:["dip","bw"] },
   ],
-  pilates: [
-    { name:"Breath + bracing", pattern:"core", logType:"timed", tags:["bw"] },
+  core: [
     { name:"Dead bug / hollow hold", pattern:"core", logType:"timed", tags:["bw"] },
     { name:"Side plank", pattern:"core", logType:"timed", tags:["bw"] },
+    { name:"Breath + bracing", pattern:"core", logType:"timed", tags:["bw"] },
+  ],
+  mobility: [
     { name:"Hip mobility flow", pattern:"mobility", logType:"timed", tags:["bw"] },
     { name:"Thoracic mobility flow", pattern:"mobility", logType:"timed", tags:["bw"] },
   ],
-  tactical: [
-    { name:"Push-up interval", pattern:"push", logType:"timed", tags:["bw"] },
-    { name:"Squat / lunge interval", pattern:"squat", logType:"timed", tags:["bw"] },
-    { name:"Core circuit", pattern:"core", logType:"circuit", tags:["bw"] },
-    { name:"Run/ruck/bike interval", pattern:"cardio", logType:"timed", tags:["cardio"] },
-  ],
-  calisthenics: [
-    { name:"Push-up (variation)", pattern:"push", logType:"loadreps", tags:["bw"] },
-    { name:"Pull-up (variation)", pattern:"pull", logType:"loadreps", tags:["pullup","bw"] },
-    { name:"Dip (variation)", pattern:"dips", logType:"loadreps", tags:["dip","bw"] },
-    { name:"Split squat progression", pattern:"squat", logType:"loadreps", tags:["bw"] },
-    { name:"Hollow hold / plank", pattern:"core", logType:"timed", tags:["bw"] },
-  ],
+  cardio: [
+    { name:"Run/ruck/bike interval", pattern:"cardio", logType:"timed", tags:["cardio","bw"] },
+  ]
 };
 
-function addItem(cfg, items, usedNames, ex) {
+function pickSeeded(cfg, pool, seed, usedNames, usedPatterns, { preferPattern } = {}) {
+  const tags = eqTags(cfg);
+
+  const list = pool.filter(x => {
+    if (preferPattern && x.pattern !== preferPattern) return false;
+    if (movementBlocked(cfg, x.pattern)) return false;
+
+    // equipment
+    if (!x.tags.some(tt => tags.has(tt))) return false;
+
+    // no duplicates in session
+    if (usedNames.has(x.name)) return false;
+
+    // avoid repeating the same *pattern* too many times in a session
+    if (usedPatterns.has(x.pattern) && x.pattern !== "accessory" && x.pattern !== "core" && x.pattern !== "mobility") {
+      return false;
+    }
+
+    // high spine sensitivity: avoid heavy labels
+    if (cfg.inj_spine === "high") {
+      const n = x.name.toLowerCase();
+      if (n.includes("deadlift") || n === "back squat" || n === "squat") return false;
+    }
+
+    // tolerance constraints
+    if (x.name.toLowerCase().includes("pull-up") && cfg.mv_pullups !== "good") return false;
+    if (x.name.toLowerCase() === "dips" && cfg.mv_dips !== "good") return false;
+
+    return true;
+  });
+
+  if (!list.length) return null;
+
+  const base = hashInt(seed);
+  for (let k = 0; k < list.length; k++) {
+    const idx = (base + k) % list.length;
+    const choice = list[idx];
+    if (!usedNames.has(choice.name)) return choice;
+  }
+  return list[0];
+}
+
+function addItem(cfg, items, usedNames, usedPatterns, ex) {
   if (!ex) return;
   usedNames.add(ex.name);
+  usedPatterns.add(ex.pattern);
   items.push({
     id: `I${uid()}`,
     name: ex.name,
@@ -184,109 +176,129 @@ function addItem(cfg, items, usedNames, ex) {
   });
 }
 
-function buildSession(cfg, label, sessionIndex) {
-  const items = [];
-  const usedNames = new Set();
-  const seedBase = `${cfg.style}|${cfg.goal}|${cfg.units}|${cfg.gender}|${label}|${sessionIndex}`;
-
+function sessionRecipes(cfg, freq) {
+  // “No overlap” interpretation: each session emphasizes different main regions/patterns.
+  // We still allow accessories/core/mobility to appear across days.
   if (cfg.style === "pilates") {
-    addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.pilates, seedBase + "|1", usedNames));
-    addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.pilates, seedBase + "|2", usedNames, { preferPattern: "mobility" }));
-    addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.pilates, seedBase + "|3", usedNames));
-    addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.pilates, seedBase + "|4", usedNames, { preferPattern: "mobility" }));
-    return { id: `S${uid()}`, label, items };
+    return Array.from({ length: freq }, (_, i) => ({
+      label: `Session ${i + 1}`,
+      blocks: ["core","mobility","core","mobility"]
+    }));
   }
 
   if (cfg.style === "tactical") {
-    addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.tactical, seedBase + "|push", usedNames, { preferPattern: "push" }));
-    addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.pull, seedBase + "|pull", usedNames, { preferPattern: "pull" }));
-    addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.tactical, seedBase + "|squat", usedNames, { preferPattern: "squat" }));
-    addItem(cfg, items, usedNames,
-      pickSeeded(cfg, POOLS.tactical, seedBase + "|cardio", usedNames, { preferPattern: "cardio" }) ||
-      pickSeeded(cfg, POOLS.tactical, seedBase + "|core", usedNames, { preferPattern: "core" })
-    );
-    return { id: `S${uid()}`, label, items };
+    return Array.from({ length: freq }, (_, i) => ({
+      label: `Session ${i + 1}`,
+      blocks: ["push","pull","squat","cardio"]
+    }));
   }
 
   if (cfg.style === "calisthenics") {
-    addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.calisthenics, seedBase + "|push", usedNames, { preferPattern: "push" }));
-    addItem(cfg, items, usedNames,
-      pickSeeded(cfg, POOLS.calisthenics, seedBase + "|pull", usedNames, { preferPattern: "pull" }) ||
-      pickSeeded(cfg, POOLS.pull, seedBase + "|pull2", usedNames, { preferPattern: "pull" })
-    );
-    addItem(cfg, items, usedNames,
-      pickSeeded(cfg, POOLS.calisthenics, seedBase + "|squat", usedNames, { preferPattern: "squat" }) ||
-      pickSeeded(cfg, POOLS.squat, seedBase + "|squat2", usedNames, { preferPattern: "squat" })
-    );
-    addItem(cfg, items, usedNames,
-      pickSeeded(cfg, POOLS.calisthenics, seedBase + "|core", usedNames, { preferPattern: "core" }) ||
-      pickSeeded(cfg, POOLS.pilates, seedBase + "|core2", usedNames, { preferPattern: "core" })
-    );
-    return { id: `S${uid()}`, label, items };
+    return Array.from({ length: freq }, (_, i) => ({
+      label: `Session ${i + 1}`,
+      blocks: ["push","pull","squat","core"]
+    }));
   }
 
   if (cfg.style === "hit") {
-    // Minimalist HIT A/B/C — still varies deterministically
-    if (label === "Day A") {
-      addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.push, seedBase + "|push1", usedNames, { preferPattern: "push" }));
-      addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.push, seedBase + "|push2", usedNames, { preferPattern: "push" }));
-      addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.pull, seedBase + "|pull1", usedNames, { preferPattern: "pull" }));
-      addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.pull, seedBase + "|pull2", usedNames, { preferPattern: "pull" }));
-      return { id: `S${uid()}`, label, items };
-    }
-    if (label === "Day B") {
-      addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.squat, seedBase + "|legs1", usedNames, { preferPattern: "squat" }));
-      addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.hinge, seedBase + "|legs2", usedNames, { preferPattern: "hinge" }));
-      addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.accessories, seedBase + "|acc", usedNames));
-      return { id: `S${uid()}`, label, items };
-    }
-    addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.accessories, seedBase + "|a1", usedNames));
-    addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.accessories, seedBase + "|a2", usedNames));
-    addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.accessories, seedBase + "|a3", usedNames));
-    addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.accessories, seedBase + "|a4", usedNames));
-    return { id: `S${uid()}`, label, items };
+    // HIT A/B/C has built-in separation
+    const base = [
+      { label:"Day A", blocks:["push","push","pull","pull"] },
+      { label:"Day B", blocks:["squat","hinge","accessory"] },
+      { label:"Day C", blocks:["accessory","accessory","accessory","core"] },
+    ];
+    return base.slice(0, Math.min(3, freq));
   }
 
-  // General / Traditional: rotate the emphasis per sessionIndex
-  const orders = [
-    ["push","pull","squat","accessories"],
-    ["pull","push","hinge","accessories"],
-    ["push","pull","hinge","accessories"],
-    ["pull","push","squat","accessories"],
+  // Default structured gym splits:
+  if (freq === 2) {
+    return [
+      { label:"Upper", blocks:["push","pull","push","pull","accessory"] },
+      { label:"Lower", blocks:["squat","hinge","squat","accessory","core"] },
+    ];
+  }
+
+  if (freq === 3) {
+    return [
+      { label:"Push", blocks:["push","push","accessory","core"] },
+      { label:"Legs", blocks:["squat","hinge","squat","accessory","core"] },
+      { label:"Pull", blocks:["pull","pull","accessory","core"] },
+    ];
+  }
+
+  if (freq === 4) {
+    return [
+      { label:"Upper A", blocks:["push","pull","push","accessory","core"] },
+      { label:"Lower A", blocks:["squat","hinge","squat","accessory","core"] },
+      { label:"Upper B", blocks:["pull","push","pull","accessory","core"] },
+      { label:"Lower B", blocks:["hinge","squat","hinge","accessory","core"] },
+    ];
+  }
+
+  if (freq === 5) {
+    return [
+      { label:"Push", blocks:["push","push","accessory","core"] },
+      { label:"Pull", blocks:["pull","pull","accessory","core"] },
+      { label:"Legs", blocks:["squat","hinge","squat","accessory","core"] },
+      { label:"Upper", blocks:["push","pull","accessory","core"] },
+      { label:"Lower", blocks:["hinge","squat","accessory","core"] },
+    ];
+  }
+
+  // 6+ days: add a conditioning/mobility day in rotation
+  const base6 = [
+    { label:"Push", blocks:["push","push","accessory","core"] },
+    { label:"Pull", blocks:["pull","pull","accessory","core"] },
+    { label:"Legs", blocks:["squat","hinge","squat","accessory","core"] },
+    { label:"Upper", blocks:["push","pull","accessory","core"] },
+    { label:"Lower", blocks:["hinge","squat","accessory","core"] },
+    { label:"Conditioning", blocks:["cardio","core","mobility","core"] },
   ];
-  const ord = orders[sessionIndex % orders.length];
+  return base6.slice(0, freq);
+}
 
-  for (let slot = 0; slot < ord.length; slot++) {
-    const key = ord[slot];
-    if (key === "push") addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.push, seedBase + `|push${slot}`, usedNames, { preferPattern:"push" }));
-    if (key === "pull") addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.pull, seedBase + `|pull${slot}`, usedNames, { preferPattern:"pull" }));
-    if (key === "squat") addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.squat, seedBase + `|squat${slot}`, usedNames, { preferPattern:"squat" }));
-    if (key === "hinge") addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.hinge, seedBase + `|hinge${slot}`, usedNames, { preferPattern:"hinge" }));
-    if (key === "accessories") addItem(cfg, items, usedNames, pickSeeded(cfg, POOLS.accessories, seedBase + `|acc${slot}`, usedNames));
+function buildSession(cfg, recipe, sessionIndex) {
+  const items = [];
+  const usedNames = new Set();
+  const usedPatterns = new Set();
+  const seedBase = `${cfg.style}|${cfg.goal}|${cfg.units}|${cfg.gender}|${recipe.label}|${sessionIndex}`;
+
+  for (let i = 0; i < recipe.blocks.length; i++) {
+    const b = recipe.blocks[i];
+    let pool = null;
+    let preferPattern = null;
+
+    if (b === "push") { pool = POOLS.push; preferPattern = "push"; }
+    if (b === "pull") { pool = POOLS.pull; preferPattern = "pull"; }
+    if (b === "squat") { pool = POOLS.squat; preferPattern = "squat"; }
+    if (b === "hinge") { pool = POOLS.hinge; preferPattern = "hinge"; }
+    if (b === "accessory") { pool = POOLS.accessory; }
+    if (b === "core") { pool = POOLS.core; }
+    if (b === "mobility") { pool = POOLS.mobility; }
+    if (b === "cardio") { pool = POOLS.cardio; }
+
+    const ex = pickSeeded(cfg, pool || [], seedBase + `|${b}|${i}`, usedNames, usedPatterns, { preferPattern });
+    addItem(cfg, items, usedNames, usedPatterns, ex);
   }
 
-  return { id: `S${uid()}`, label, items };
+  return { id: `S${uid()}`, label: recipe.label, items };
 }
 
 export function generateProgram(cfg) {
   const createdAt = Date.now();
+  const freq = Math.max(2, Math.min(6, Number(cfg.freq) || 3));
+
   const meta = {
     style: cfg.style,
     goal: cfg.goal,
-    freq: Number(cfg.freq),
+    freq,
     recovery: cfg.recovery,
     units: cfg.units,
     createdAt,
   };
 
-  const labels = (() => {
-    const f = Number(cfg.freq);
-    if (cfg.style === "hit") return ["Day A", "Day B", "Day C"].slice(0, Math.min(3, f));
-    if (f === 2) return ["Session 1", "Session 2"];
-    if (f === 3) return ["Session 1", "Session 2", "Session 3"];
-    return Array.from({ length: f }, (_, i) => `Session ${i + 1}`);
-  })();
+  const recipes = sessionRecipes(cfg, freq);
+  const sessions = recipes.map((r, i) => buildSession(cfg, r, i));
 
-  const sessions = labels.map((l, i) => buildSession(cfg, l, i));
   return { meta, sessions };
-}
+                                    }
