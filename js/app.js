@@ -1,6 +1,7 @@
 // js/app.js
 import { store, todayISO, escapeHtml } from "./storage.js";
 import { Builder } from "./builder.js";
+import { Logger } from "./logger.js";
 
 const KEY_LOG = "ATL_LOG_V1";
 const KEY_PROG = "ATL_PROGRAM_V1";
@@ -84,7 +85,9 @@ function renderPlan(program) {
     const s = program.sessions.find(x => x.id === sid);
     if (!s) { list.innerHTML = ""; return; }
     list.innerHTML = s.items.map(it => {
-      const r = it.rule ? `${it.rule.repMin}-${it.rule.repMax} reps (+${it.rule.inc})` : (it.logType === "timed" ? "timed" : it.logType);
+      const r = it.rule
+        ? `${it.rule.repMin}-${it.rule.repMax} reps (+${it.rule.inc})`
+        : (it.logType === "timed" ? "timed" : it.logType);
       return `<li><b>${escapeHtml(it.name)}</b> <span class="muted">(${escapeHtml(it.logType)} · ${escapeHtml(r)})</span></li>`;
     }).join("");
   };
@@ -199,23 +202,12 @@ function wireTabs() {
   });
 }
 
-function stubPanels() {
-  $("tab_log").innerHTML = `
-    <div class="card">
-      <strong>Log</strong>
-      <div class="small muted" style="margin-top:6px;">
-        Logger UI lands next (auto-fill + auto-progression).
-      </div>
-      <div class="small muted" style="margin-top:6px;">
-        Today is ${todayISO()}.
-      </div>
-    </div>
-  `;
+function renderFuelStub() {
   $("tab_fuel").innerHTML = `
     <div class="card">
       <strong>Fuel</strong>
       <div class="small muted" style="margin-top:6px;">
-        Fuel checklist + macro starter targets lands after logger.
+        Fuel checklist + macro starter targets lands next.
       </div>
     </div>
   `;
@@ -223,32 +215,48 @@ function stubPanels() {
 
 function init() {
   wireTabs();
-  stubPanels();
 
   let program = store.load(KEY_PROG, null);
   const log = store.load(KEY_LOG, []);
 
-  // Builder mounts here and can refresh plan/pills
+  // Builder
   Builder.render("tab_builder", (newProgram) => {
     program = newProgram;
     renderPlan(program);
-    renderPills(program, store.load(KEY_LOG, []));
-    // jump user to Plan tab after generation (optional)
+
+    const curLog = store.load(KEY_LOG, []);
+    renderPills(program, curLog);
+
+    // jump to Plan after generating
     document.querySelector('.tabbtn[data-tab="plan"]').click();
   });
 
+  // Logger (mounted into tab_log)
+  Logger.render("tab_log", () => program, () => {
+    const curLog = store.load(KEY_LOG, []);
+    renderHistory(curLog);
+    renderPills(store.load(KEY_PROG, null), curLog);
+  });
+
+  // Plan + pills + settings + history
   renderPlan(program);
   renderPills(program, log);
   renderSettings(log);
   renderHistory(log);
+  renderFuelStub();
 
+  // Settings toggle
   $("btnSettings").addEventListener("click", () => $("settingsPanel").classList.toggle("hidden"));
+
+  // Search
   $("histSearch").addEventListener("input", () => renderHistory(store.load(KEY_LOG, [])));
 
+  // Today (history panel)
   $("btnHistToday").addEventListener("click", () => {
-    alert(`Today is ${todayISO()}. (Log form comes next.)`);
+    alert(`Today is ${todayISO()}. Use the Log tab to save entries.`);
   });
 
+  // Delete last
   $("btnDeleteLast").addEventListener("click", () => {
     const cur = store.load(KEY_LOG, []);
     if (!cur.length) return;
